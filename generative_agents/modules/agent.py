@@ -94,22 +94,13 @@ class Agent:
             self.scratch, "prompt_" + func_hint
         ), "Can not find func prompt_{} from scratch".format(func_hint)
         func = getattr(self.scratch, "prompt_" + func_hint)
-        prompt = func(*args, **kwargs)
+        res = func(*args, **kwargs)._asdict()
         title, msg = "{}.{}".format(self.name, func_hint), {}
         if self.llm_available():
             self.logger.info("{} -> {}".format(self.name, func_hint))
-            output = self._llm.completion(**prompt, caller=func_hint)
-            responses = self._llm.meta_responses
-            msg = {"<PROMPT>": "\n" + prompt["prompt"] + "\n"}
-            msg.update(
-                {
-                    "<RESPONSE[{}/{}]>".format(idx+1, len(responses)): "\n" + r + "\n"
-                    for idx, r in enumerate(responses)
-                }
-            )
-        else:
-            output = prompt.get("failsafe")
-        msg["<OUTPUT>"] = "\n" + str(output) + "\n"
+            output = self._llm.completion(**res)
+            msg = {"<PROMPT>": "\n" + res["prompt"] + "\n"}
+            msg.update({"response": output})
         self.logger.debug(utils.block_msg(title, msg))
         return output
 

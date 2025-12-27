@@ -1,14 +1,16 @@
-"""generative_agents.prompt.scratch"""
 
 import random
 import datetime
 import re
 from string import Template
-
+from pydantic import BaseModel
+from collections import namedtuple
+from typing import List, Tuple
 from modules import utils
 from modules.memory import Event
-from modules.model import parse_llm_output
 
+
+Result = namedtuple("Result", ["prompt", "callback", "failsafe", "return_type"])
 
 class Scratch:
     def __init__(self, name, currently, config):
@@ -51,18 +53,10 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            pattern = [
-                "评分[:： ]+(\d{1,2})",
-                "(\d{1,2})",
-            ]
-            return int(parse_llm_output(response, pattern, "match_last"))
+        class PoignancyEventResponse(BaseModel):
+            res: int
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": random.choice(list(range(10))) + 1,
-        }
+        return Result(prompt, None, random.choice(list(range(10))) + 1, PoignancyEventResponse)
 
     def prompt_poignancy_chat(self, event):
         prompt = self.build_prompt(
@@ -74,18 +68,10 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            pattern = [
-                "评分[:： ]+(\d{1,2})",
-                "(\d{1,2})",
-            ]
-            return int(parse_llm_output(response, pattern, "match_last"))
+        class PoignancyChatResponse(BaseModel):
+            res: int
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": random.choice(list(range(10))) + 1,
-        }
+        return Result(prompt, None, random.choice(list(range(10))) + 1, PoignancyChatResponse)
 
     def prompt_wake_up(self):
         prompt = self.build_prompt(
@@ -97,18 +83,16 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            patterns = [
-                "(\d{1,2}):00",
-                "(\d{1,2})",
-                "\d{1,2}",
-            ]
-            wake_up_time = int(parse_llm_output(response, patterns))
-            if wake_up_time > 11:
-                wake_up_time = 11
-            return wake_up_time
+        class wakeupResponse(BaseModel):
+            res: int
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": 6}
+        def _callback(response):
+            value = response
+            if value > 11:
+                value = 11
+            return value
+
+        return Result(prompt, _callback, 8, wakeupResponse)
 
     def prompt_schedule_init(self, wake_up):
         prompt = self.build_prompt(
@@ -121,16 +105,8 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            patterns = [
-                "\d{1,2}\. (.*)。",
-                "\d{1,2}\. (.*)",
-                "\d{1,2}\) (.*)。",
-                "\d{1,2}\) (.*)",
-                "(.*)。",
-                "(.*)",
-            ]
-            return parse_llm_output(response, patterns, mode="match_all")
+        class schedule_initResponse(BaseModel):
+            res: list[str]
 
         failsafe = [
             "早上6点起床并完成早餐的例行工作",
@@ -141,7 +117,7 @@ class Scratch:
             "晚上7点放松一下，看电视",
             "晚上11点睡觉",
         ]
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        return Result(prompt, None, failsafe, schedule_initResponse)
 
     def prompt_schedule_daily(self, wake_up, daily_schedule):
         hourly_schedule = ""
@@ -159,6 +135,9 @@ class Scratch:
                 "hourly_schedule": hourly_schedule,
             }
         )
+
+        class schedule_dailyResponse(BaseModel):
+            res: dict[str, str]
 
         failsafe = {
             "6:00": "起床并完成早晨的例行工作",
@@ -182,17 +161,10 @@ class Scratch:
         }
 
         def _callback(response):
-            patterns = [
-                "\[(\d{1,2}:\d{2})\] " + self.name + "(.*)。",
-                "\[(\d{1,2}:\d{2})\] " + self.name + "(.*)",
-                "\[(\d{1,2}:\d{2})\] " + "(.*)。",
-                "\[(\d{1,2}:\d{2})\] " + "(.*)",
-            ]
-            outputs = parse_llm_output(response, patterns, mode="match_all")
-            assert len(outputs) >= 5, "less than 5 schedules"
-            return {s[0]: s[1] for s in outputs}
+            assert len(response) >= 5, "less than 5 schedules"
+            return response
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        return Result(prompt, _callback, failsafe, schedule_dailyResponse)
 
     def prompt_schedule_decompose(self, plan, schedule):
         def _plan_des(plan):
@@ -218,19 +190,17 @@ class Scratch:
             }
         )
 
+        class schedule_decomposeResponse(BaseModel):  
+            res: List[Tuple[str, int]]
+
         def _callback(response):
-            patterns = [
-                "\d{1,2}\) .*\*计划\* (.*)[\(（]+耗时[:： ]+(\d{1,2})[,， ]+剩余[:： ]+\d*[\)）]",
-            ]
-            schedules = parse_llm_output(response, patterns, mode="match_all")
-            schedules = [(s[0].strip("."), int(s[1])) for s in schedules]
-            left = plan["duration"] - sum([s[1] for s in schedules])
+            left = plan["duration"] - sum([s[1] for s in response])
             if left > 0:
-                schedules.append((plan["describe"], left))
-            return schedules
+                response.append((plan["describe"], left))
+            return response
 
         failsafe = [(plan["describe"], 10) for _ in range(int(plan["duration"] / 10))]
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        return Result(prompt, _callback, failsafe, schedule_decomposeResponse)
 
     def prompt_schedule_revise(self, action, schedule):
         plan, _ = schedule.current_plan()
@@ -275,28 +245,27 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            patterns = [
-                "^\[(\d{1,2}:\d{1,2}) ?- ?(\d{1,2}:\d{1,2})\] (.*)",
-                "^\[(\d{1,2}:\d{1,2}) ?~ ?(\d{1,2}:\d{1,2})\] (.*)",
-                "^\[(\d{1,2}:\d{1,2}) ?至 ?(\d{1,2}:\d{1,2})\] (.*)",
-            ]
-            schedules = parse_llm_output(response, patterns, mode="match_all")
-            decompose = []
-            for start, end, describe in schedules:
-                m_start = utils.daily_duration(utils.to_date(start, "%H:%M"))
-                m_end = utils.daily_duration(utils.to_date(end, "%H:%M"))
-                decompose.append(
-                    {
-                        "idx": len(decompose),
-                        "describe": describe,
-                        "start": m_start,
-                        "duration": m_end - m_start,
-                    }
-                )
+        class schedule_reviseResponse(BaseModel):
+            res: List[Tuple[str, str, str]]
+
+        def _callback(response):  
+            # response已经是List[Tuple[str, str, str]]类型  
+            # 格式: [(开始时间, 结束时间, 描述), ...]  
+            decompose = []  
+            for start, end, describe in response:  
+                m_start = utils.daily_duration(utils.to_date(start, "%H:%M"))  
+                m_end = utils.daily_duration(utils.to_date(end, "%H:%M"))  
+                decompose.append(  
+                    {  
+                        "idx": len(decompose),  
+                        "describe": describe,  
+                        "start": m_start,  
+                        "duration": m_end - m_start,  
+                    }  
+                )  
             return decompose
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": plan["decompose"]}
+        return Result(prompt, _callback, plan["decompose"], schedule_reviseResponse)
 
     def prompt_determine_sector(self, describes, spatial, address, tile):
         live_address = spatial.find_address("living_area", as_list=True)[:-1]
@@ -325,24 +294,21 @@ class Scratch:
             )
         failsafe = random.choice(sectors)
 
-        def _callback(response):
-            patterns = [
-                ".*应该去[:： ]*(.*)。",
-                ".*应该去[:： ]*(.*)",
-                "(.+)。",
-                "(.+)",
-            ]
-            sector = parse_llm_output(response, patterns)
-            if sector in sectors:
-                return sector
-            if sector in arenas:
-                return arenas[sector]
-            for s in sectors:
-                if sector.startswith(s):
-                    return s
-            return failsafe
+        class determine_sectorResponse(BaseModel):
+            res: str
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        def _callback(response):  
+            # response已经是str类型  
+            # 验证sector是否在有效列表中，或进行映射  
+            if response in sectors:  
+                return response  
+            if response in arenas:  
+                return arenas[response]  
+            for s in sectors:  
+                if response.startswith(s):  
+                    return s  
+            return failsafe
+        return Result(prompt, _callback, failsafe, determine_sectorResponse)
 
     def prompt_determine_arena(self, describes, spatial, address):
         prompt = self.build_prompt(
@@ -360,17 +326,13 @@ class Scratch:
         arenas = spatial.get_leaves(address)
         failsafe = random.choice(arenas)
 
-        def _callback(response):
-            patterns = [
-                ".*应该去[:： ]*(.*)。",
-                ".*应该去[:： ]*(.*)",
-                "(.+)。",
-                "(.+)",
-            ]
-            arena = parse_llm_output(response, patterns)
-            return arena if arena in arenas else failsafe
+        class determine_arenaResponse(BaseModel):  
+            res: str
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        def _callback(response):
+            return response if response in arenas else failsafe
+
+        return Result(prompt, _callback, failsafe, determine_arenaResponse)
 
     def prompt_determine_object(self, describes, spatial, address):
         objects = spatial.get_leaves(address)
@@ -385,20 +347,18 @@ class Scratch:
 
         failsafe = random.choice(objects)
 
+        class determine_objectResponse(BaseModel):
+            res: str
         def _callback(response):
             # pattern = ["The most relevant object from the Objects is: <(.+?)>", "<(.+?)>"]
-            patterns = [
-                ".*是[:： ]*(.*)。",
-                ".*是[:： ]*(.*)",
-                "(.+)。",
-                "(.+)",
-            ]
-            obj = parse_llm_output(response, patterns)
-            return obj if obj in objects else failsafe
+            return response if response in objects else failsafe
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
-
+        return Result(prompt, _callback, failsafe, determine_objectResponse)
+    """
     def prompt_describe_emoji(self, describe):
+        class describe_emojiResponse(BaseModel):
+            res: str
+
         prompt = self.build_prompt(
             "describe_emoji",
             {
@@ -428,7 +388,7 @@ class Scratch:
             return parse_llm_output(response, ["Emoji: (.*)"])[:3]
 
         return {"prompt": prompt, "callback": _callback, "failsafe": "💭", "retry": 1}
-
+    """
     def prompt_describe_event(self, subject, describe, address, emoji=None):
         prompt = self.build_prompt(
             "describe_event",
@@ -443,26 +403,18 @@ class Scratch:
         failsafe = Event(
             subject, "此时", e_describe, describe=describe, address=address, emoji=emoji
         )
+        class describe_eventResponse(BaseModel):
+            res: List[Tuple[str, str, str]]
 
-        def _callback(response):
-            response_list = response.replace(")", ")\n").split("\n")
-            for response in response_list:
-                if len(response.strip()) < 7:
-                    continue
-                if response.count("(") > 1 or response.count(")") > 1 or response.count("（") > 1 or response.count("）") > 1:
-                    continue
-
-                patterns = [
-                    "[\(（]<(.+?)>[,， ]+<(.+?)>[,， ]+<(.*)>[\)）]",
-                    "[\(（](.+?)[,， ]+(.+?)[,， ]+(.*)[\)）]",
-                ]
-                outputs = parse_llm_output(response, patterns)
-                if len(outputs) == 3:
-                    return Event(*outputs, describe=describe, address=address, emoji=emoji)
-
+        def _callback(response):  
+            # response已经是List[Tuple[str, str, str]]类型  
+            # 格式: [(主语, 谓语, 宾语), ...]  
+            for subject, predicate, obj in response:  
+                # 验证三元组不为空  
+                if subject and predicate and obj:  
+                    return Event(subject, predicate, obj, describe=describe, address=address, emoji=emoji)  
             return None
-
-        return {"prompt": prompt, "callback": _callback, "failsafe": failsafe}
+        return Result(prompt, _callback, failsafe, describe_eventResponse)
 
     def prompt_describe_object(self, obj, describe):
         prompt = self.build_prompt(
@@ -474,14 +426,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            patterns = [
-                "<" + obj + "> ?" + "(.*)。",
-                "<" + obj + "> ?" + "(.*)",
-            ]
-            return parse_llm_output(response, patterns)
+        class describe_objectResponse(BaseModel):
+            res: str
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": "空闲"}
+        failsafe = "空闲"
+        return Result(prompt, None, failsafe, describe_objectResponse)
 
     def prompt_decide_chat(self, agent, other, focus, chats):
         def _status_des(a):
@@ -493,7 +442,7 @@ class Scratch:
         context = "。".join(
             [c.describe for c in focus["events"]]
         )
-        context += "\n" + "。".join([c.describe for c in focus["thoughts"]])
+        context += "\n" + "。".join([c.describe for c in focus["thoughts"]]) 
         date_str = utils.get_timer().get_date("%Y-%m-%d %H:%M:%S")
         chat_history = ""
         if chats:
@@ -513,12 +462,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            if "No" in response or "no" in response or "否" in response or "不" in response:
-                return False
-            return True
+        class decide_chatResponse(BaseModel):
+            res: bool
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": False}
+        failsafe = False
+        return Result(prompt, None, failsafe, decide_chatResponse)
 
     def prompt_decide_chat_terminate(self, agent, other, chats):
         conversation = "\n".join(["{}: {}".format(n, u) for n, u in chats])
@@ -535,12 +483,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            if "No" in response or "no" in response or "否" in response or "不" in response:
-                return False
-            return True
+        class decide_chat_terminateResponse(BaseModel):
+            res: bool
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": False}
+        failsafe = False
+        return Result(prompt, None, failsafe, decide_chat_terminateResponse)
 
     def prompt_decide_wait(self, agent, other, focus):
         example1 = self.build_prompt(
@@ -612,10 +559,14 @@ class Scratch:
             }
         )
 
+        class decide_waitResponse(BaseModel):
+            res: str
+
         def _callback(response):
             return "A" in response
 
-        return {"prompt": prompt, "callback": _callback, "failsafe": False}
+        failsafe = False
+        return Result(prompt, _callback, failsafe, decide_waitResponse)
 
     def prompt_summarize_relation(self, agent, other_name):
         nodes = agent.associate.retrieve_focus([other_name], 50)
@@ -628,15 +579,11 @@ class Scratch:
                 "another": other_name,
             }
         )
+        failsafe = agent.name + " 正在看着 " + other_name
+        class summarize_relationResponse(BaseModel):
+            res: str
 
-        def _callback(response):
-            return response
-
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": agent.name + " 正在看着 " + other_name,
-        }
+        return Result(prompt, None, failsafe, summarize_relationResponse)
 
     def prompt_generate_chat(self, agent, other, relation, chats):
         focus = [relation, other.get_event().get_describe()]
@@ -681,25 +628,20 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            assert "{" in response and "}" in response
-            json_content = utils.load_dict(
-                "{" + response.split("{")[1].split("}")[0] + "}"
-            )
-            text = json_content[agent.name].replace("\n\n", "\n").strip(" \n\"'“”‘’")
-            return text
+        class generate_chat(BaseModel):  
+            res: str
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": "嗯",
-        }
+        failsafe = "嗯"
+        return Result(prompt, None, failsafe, generate_chat)
 
     def prompt_generate_chat_check_repeat(self, agent, chats, content):
         conversation = "\n".join(["{}: {}".format(n, u) for n, u in chats])
         conversation = (
                 conversation or "[对话尚未开始]"
         )
+
+        class generate_chat_check_repeatResponse(BaseModel):  
+            res: bool
 
         prompt = self.build_prompt(
             "generate_chat_check_repeat",
@@ -709,13 +651,8 @@ class Scratch:
                 "agent": agent.name,
             }
         )
-
-        def _callback(response):
-            if "No" in response or "no" in response or "否" in response or "不" in response:
-                return False
-            return True
-
-        return {"prompt": prompt, "callback": _callback, "failsafe": False}
+        failsafe = False
+        return Result(prompt, None, failsafe, generate_chat_check_repeatResponse)
 
     def prompt_summarize_chats(self, chats):
         conversation = "\n".join(["{}: {}".format(n, u) for n, u in chats])
@@ -727,6 +664,9 @@ class Scratch:
             }
         )
 
+        class summarize_chatsResponse(BaseModel):  
+            res: str
+
         def _callback(response):
             return response.strip()
 
@@ -735,11 +675,7 @@ class Scratch:
         else:
             failsafe = "{} 说的话没有得到回应".format(chats[0][0])
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": failsafe,
-        }
+        return Result(prompt, _callback, failsafe, summarize_chatsResponse)
 
     def prompt_reflect_focus(self, nodes, topk):
         prompt = self.build_prompt(
@@ -750,19 +686,15 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            pattern = ["^\d{1}\. (.*)", "^\d{1}\) (.*)", "^\d{1} (.*)"]
-            return parse_llm_output(response, pattern, mode="match_all")
+        class reflect_focusResponse(BaseModel):  
+            res: List[str]
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": [
+        failsafe = [
                 "{} 是谁？".format(self.name),
                 "{} 住在哪里？".format(self.name),
                 "{} 今天要做什么？".format(self.name),
-            ],
-        }
+            ]
+        return Result(prompt, None, failsafe, reflect_focusResponse)
 
     def prompt_reflect_insights(self, nodes, topk):
         prompt = self.build_prompt(
@@ -773,36 +705,25 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            patterns = [
-                "^\d{1}[\. ]+(.*)[。 ]*[\(（]+.*序号[:： ]+([\d,， ]+)[\)）]",
-                "^\d{1}[\. ]+(.*)[。 ]*[\(（]([\d,， ]+)[\)）]",
-            ]
-            insights, outputs = [], parse_llm_output(
-                response, patterns, mode="match_all"
-            )
-            if outputs:
-                for output in outputs:
-                    if isinstance(output, str):
-                        insight, node_ids = output, []
-                    elif len(output) == 2:
-                        insight, reason = output
-                        indices = [int(e.strip()) for e in reason.split(",")]
-                        node_ids = [nodes[i].node_id for i in indices if i < len(nodes)]
-                    insights.append([insight.strip(), node_ids])
-                return insights
-            raise Exception("Can not find insights")
+        class reflect_insightsResponse(BaseModel):  
+            res: List[Tuple[str, str]]
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": [
+        def _callback(response):  
+            insights = []  
+            for insight, node_ids_str in response:  
+                # 将字符串"1,2,3"转换为节点ID列表  
+                indices = [int(i.strip()) for i in node_ids_str.split(",")]  
+                node_ids = [nodes[i].node_id for i in indices if i < len(nodes)]  
+                insights.append([insight.strip(), node_ids])  
+            return insights
+
+        failsafe = [
                 [
                     "{} 在考虑下一步该做什么".format(self.name),
                     [nodes[0].node_id],
                 ]
-            ],
-        }
+            ]
+        return Result(prompt, _callback, failsafe, reflect_insightsResponse)
 
     def prompt_reflect_chat_planing(self, chats):
         all_chats = "\n".join(["{}: {}".format(n, c) for n, c in chats])
@@ -815,14 +736,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            return response
+        class reflect_chat_planingResponse(BaseModel):  
+            res: str
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": f"{self.name} 进行了一次对话",
-        }
+        failsafe = f"{self.name} 进行了一次对话"
+        return Result(prompt, None, failsafe, reflect_chat_planingResponse)
 
     def prompt_reflect_chat_memory(self, chats):
         all_chats = "\n".join(["{}: {}".format(n, c) for n, c in chats])
@@ -834,16 +752,11 @@ class Scratch:
                 "agent": self.name,
             }
         )
+        class reflect_chat_memoryResponse(BaseModel):  
+            res: str
 
-        def _callback(response):
-            return response
-
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            # "failsafe": f"{self.name} had a sonversation",
-            "failsafe": f"{self.name} 进行了一次对话",
-        }
+        failsafe = f"{self.name} 进行了一次对话"
+        return Result(prompt, None, failsafe, reflect_chat_memoryResponse)
 
     def prompt_retrieve_plan(self, nodes):
         statements = [
@@ -859,20 +772,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            pattern = [
-                "^\d{1,2}\. (.*)。",
-                "^\d{1,2}\. (.*)",
-                "^\d{1,2}\) (.*)。",
-                "^\d{1,2}\) (.*)",
-            ]
-            return parse_llm_output(response, pattern, mode="match_all")
+        class retrieve_planResponse(BaseModel):
+            res: List[str]
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": [r.describe for r in random.choices(nodes, k=5)],
-        }
+        failsafe = [r.describe for r in random.choices(nodes, k=5)]
+        return Result(prompt, None, failsafe, retrieve_planResponse)
 
     def prompt_retrieve_thought(self, nodes):
         statements = [
@@ -887,14 +791,11 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            return response
+        class retrieve_thoughtResponse(BaseModel):
+            res: str
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": "{} 应该遵循昨天的日程".format(self.name),
-        }
+        failsafe = "{} 应该遵循昨天的日程".format(self.name)
+        return Result(prompt, None, failsafe, retrieve_thoughtResponse)
 
     def prompt_retrieve_currently(self, plan_note, thought_note):
         time_stamp = (
@@ -913,15 +814,9 @@ class Scratch:
             }
         )
 
-        def _callback(response):
-            pattern = [
-                "^状态: (.*)。",
-                "^状态: (.*)",
-            ]
-            return parse_llm_output(response, pattern)
+        class retrieve_currentlyResponse(BaseModel):
+            res: str
 
-        return {
-            "prompt": prompt,
-            "callback": _callback,
-            "failsafe": self.currently,
-        }
+        failsafe = self.currently
+
+        return Result(prompt, None, failsafe, retrieve_currentlyResponse)
