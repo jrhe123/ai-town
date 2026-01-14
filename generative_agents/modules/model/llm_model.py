@@ -54,7 +54,7 @@ class LLMModel:
         self._summary[caller][pos] += 1
         return response or failsafe
 
-    def _completion(self, prompt, **kwargs):
+    def _completion(self, prompt, return_type, **kwargs):
         raise NotImplementedError(
             "_completion is not support for " + str(self.__class__)
         )
@@ -92,7 +92,7 @@ class OllamaLLMModel(LLMModel):
     def setup(self, config):
         return None
 
-    def ollama_chat(self, messages, temperature):
+    def ollama_chat(self, messages, temperature, response_format=None):
         headers = {
             "Content-Type": "application/json"
         }
@@ -102,6 +102,8 @@ class OllamaLLMModel(LLMModel):
             "temperature": temperature,
             "stream": False,
         }
+        if response_format:
+            params["response_format"] = response_format
 
         response = requests.post(
             url=f"{self._base_url}/chat/completions",
@@ -111,16 +113,56 @@ class OllamaLLMModel(LLMModel):
         )
         return response.json()
 
-    def _completion(self, prompt, temperature=0.5):
-        if "qwen3" in self._model and "\n/nothink" not in prompt:
-            # 针对Qwen3模型禁用think，提高推理速度
-            prompt += "\n/nothink"
+    def _completion(self, prompt, return_type, temperature=0.5):
+        import json
+        
+        # Generate JSON schema from the Pydantic model for structured output
+        response_format = None
+        if return_type is not None:
+            try:
+                schema = return_type.model_json_schema()
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": return_type.__name__,
+                        "strict": True,
+                        "schema": schema
+                    }
+                }
+            except Exception:
+                pass
+        
         messages = [{"role": "user", "content": prompt}]
-        response = self.ollama_chat(messages=messages, temperature=temperature)
-        if response and len(response["choices"]) > 0:
+        response = self.ollama_chat(messages=messages, temperature=temperature, response_format=response_format)
+        
+        if response and len(response.get("choices", [])) > 0:
             ret = response["choices"][0]["message"]["content"]
             # 从输出结果中过滤掉<think>标签内的文字，以免影响后续逻辑
-            return re.sub(r"<think>.*</think>", "", ret, flags=re.DOTALL)
+            ret = re.sub(r"<think>.*</think>", "", ret, flags=re.DOTALL)
+            
+            # Parse and validate the response using the Pydantic model
+            if return_type is not None:
+                try:
+                    # Try to parse as JSON and validate with Pydantic
+                    parsed = json.loads(ret)
+                    validated = return_type.model_validate(parsed)
+                    return validated.res
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, try to extract JSON from the text
+                    json_match = re.search(r'\{.*\}', ret, re.DOTALL)
+                    if json_match:
+                        try:
+                            parsed = json.loads(json_match.group())
+                            validated = return_type.model_validate(parsed)
+                            return validated.res
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                    # If all parsing fails, return the raw text
+                    return ret
+                except Exception as e:
+                    print(f"OllamaLLMModel: Failed to validate response: {e}")
+                    return ret
+            return ret
         return ""
 
 

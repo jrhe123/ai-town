@@ -289,3 +289,5 @@ if __name__ == "__main__":
 
     generate_report(checkpoints_folder, compressed_folder, file_markdown)
     generate_movement(checkpoints_folder, compressed_folder, file_movement)
+
+    print("Compression completed.")
