@@ -8,13 +8,13 @@
 
 在终端窗口输入命令，下载需要的模型。
 
-例如本项目默认使用的大语言模型是`qwen3:8b-q4_K_M`，嵌入模型是`bge-m3`，可通过以下命令下载：
+例如本项目默认使用的大语言模型是`qwen3:qwen3:4b-instruct-2507-q4_K_M`，嵌入模型是`qwen3-embedding:0.6b-q8_0`，可通过以下命令下载：
 ```
-ollama pull qwen3:8b-q4_K_M
-ollama pull bge-m3:latest
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama pull qwen3-embedding:0.6b-q8_0
 ```
 
-*注：MacOS系统M芯片+16G以上内存，或Windows系统30/40系列N卡+12G以上显存，建议使用qwen3-8b模型。24G以上显存可使用更大的量化模型*
+*注：MacOS系统M芯片+16G以上内存，或Windows系统30/40系列N卡+12G以上显存，建议使用7b以上模型。24G以上显存可使用更大的量化模型*
 
 # 运行
 

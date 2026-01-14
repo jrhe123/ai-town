@@ -11,10 +11,10 @@
         },
         "think": {
             "llm": {
-                "provider": "openai",
-                "model": "deepseek-chat",
-                "base_url": "https://api.deepseek.com",
-                "api_key": "your-api-key"
+                "provider": "ollama",
+                "model": "qwen3:4b-instruct-2507-q4_K_M",
+                "base_url": "http://127.0.0.1:11434/v1",
+                "api_key": ""
             },
             "interval": 1000,
             "poignancy_max": 150
@@ -22,8 +22,8 @@
         "chat_iter": 4,
         "associate": {
             "embedding": {
-                "provider": "hugging_face",
-                "model": "path_to_model",
+                "provider": "ollama",
+                "model": "qwen3-embedding:0.6b-q8_0",
                 "base_url": "http://127.0.0.1:11434",
                 "api_key": ""
             },

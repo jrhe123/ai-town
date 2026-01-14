@@ -12,7 +12,11 @@ Generative Agents的原始代码工程化程度较低，难以持续维护或拓
 
 更新：
 
-- 2025.06.02：增加对Qwen3和DeepSeek-R1等新模型的支持（处理输出结果中的\<think\>标签）。
+- 2025.06.02
+    - 增加对`Qwen3`和`DeepSeek-R1`等新模型的支持（处理输出结果中的\<think\>标签）。
+- 2026.01.15
+    - 使用`pydantic`模型取代正则表达式解析。感谢[Findworth](https://github.com/Findworth)提交的PR。
+    - 默认语言模型改为`qwen3:4b-instruct-2507`，嵌入模型改为`qwen3-embedding:0.6b`，减少显存占用，提升推理速度。
 
 主要工作：
 
@@ -79,10 +83,10 @@ python start.py --name sim-test --start "20250213-09:30" --step 10 --stride 10
 ### 3.1 生成回放数据
 
 ```
-python compress.py --name <simulation-name>
+python compress.py --name sim-test
 ```
 
-运行结束后将在`results/compressed/<simulation-name>`目录下生成回放数据文件`movement.json`。同时还将生成`simulation.md`，以时间线方式呈现每个智能体的状态及对话内容。
+运行结束后将在`results/compressed/sim-test`目录下生成回放数据文件`movement.json`。同时还将生成`simulation.md`，以时间线方式呈现每个智能体的状态及对话内容。
 
 ### 3.2 启动回放服务
 
@@ -90,9 +94,9 @@ python compress.py --name <simulation-name>
 python replay.py
 ```
 
-通过浏览器打开回放页面（地址：`http://127.0.0.1:5000/?name=<simulation-name>`），可以看到虚拟小镇中的居民在各个时间段的活动。
+通过浏览器打开回放页面（地址：`http://127.0.0.1:5000/?name=sim-test` ），可以看到虚拟小镇中的居民在各个时间段的活动。
 
-*可通过方向键移动画面*
+*只能通过键盘方向键移动画面*
 
 参数说明  
 - `name` - 启动虚拟小镇时设定的名称。
