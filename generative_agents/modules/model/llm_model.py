@@ -3,6 +3,7 @@
 import time
 import re
 import requests
+from magentic import prompt
 
 
 class LLMModel:
@@ -10,7 +11,6 @@ class LLMModel:
         self._api_key = config["api_key"]
         self._base_url = config["base_url"]
         self._model = config["model"]
-        self._meta_responses = []
         self._summary = {"total": [0, 0, 0]}
 
         self._handle = self.setup(config)
@@ -27,21 +27,21 @@ class LLMModel:
         retry=10,
         callback=None,
         failsafe=None,
+        return_type=None,
         caller="llm_normal",
         **kwargs
     ):
-        response, self._meta_responses = None, []
+        response = None
         self._summary.setdefault(caller, [0, 0, 0])
         for _ in range(retry):
             try:
-                meta_response = self._completion(prompt, **kwargs).strip()
-                self._meta_responses.append(meta_response)
+                output = self._completion(prompt, return_type, **kwargs)
                 self._summary["total"][0] += 1
                 self._summary[caller][0] += 1
                 if callback:
-                    response = callback(meta_response)
+                    response = callback(output)
                 else:
-                    response = meta_response
+                    response = output
             except Exception as e:
                 print(f"LLMModel.completion() caused an error: {e}")
                 time.sleep(5)
@@ -71,25 +71,21 @@ class LLMModel:
     def disable(self):
         self._enabled = False
 
-    @property
-    def meta_responses(self):
-        return self._meta_responses
-
 
 class OpenAILLMModel(LLMModel):
     def setup(self, config):
-        from openai import OpenAI
+        from magentic import OpenaiChatModel
 
-        return OpenAI(api_key=self._api_key, base_url=self._base_url)
+        return OpenaiChatModel(self._model, api_key=self._api_key, base_url=self._base_url)
 
-    def _completion(self, prompt, temperature=0.5):
-        messages = [{"role": "user", "content": prompt}]
-        response = self._handle.chat.completions.create(
-            model=self._model, messages=messages, temperature=temperature
+    def _completion(self, _prompt, return_type, temperature=0.5):
+        @prompt(
+            "{_prompt}",
+            model=self._handle
         )
-        if len(response.choices) > 0:
-            return response.choices[0].message.content
-        return ""
+        def response(_prompt: str) -> return_type: ...
+        output = response(_prompt).res
+        return output
 
 
 class OllamaLLMModel(LLMModel):
@@ -140,29 +136,4 @@ def create_llm_model(llm_config):
         raise NotImplementedError(
             "llm provider {} is not supported".format(llm_config["provider"])
         )
-    return None
-
-
-def parse_llm_output(response, patterns, mode="match_last", ignore_empty=False):
-    if isinstance(patterns, str):
-        patterns = [patterns]
-    rets = []
-    for line in response.split("\n"):
-        line = line.replace("**", "").strip()
-        for pattern in patterns:
-            if pattern:
-                matchs = re.findall(pattern, line)
-            else:
-                matchs = [line]
-            if len(matchs) >= 1:
-                rets.append(matchs[0])
-                break
-    if not ignore_empty:
-        assert rets, "Failed to match llm output"
-    if mode == "match_first":
-        return rets[0]
-    if mode == "match_last":
-        return rets[-1]
-    if mode == "match_all":
-        return rets
     return None
